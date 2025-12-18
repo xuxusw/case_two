@@ -1,3 +1,5 @@
 django 
 djangorestframework 
 djangorestframework-simplejwt
+streamlit 
+requests
