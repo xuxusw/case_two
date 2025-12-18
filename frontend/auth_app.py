@@ -58,7 +58,7 @@ def register(username, password, password2, email, first_name, last_name, phone)
     }
     response = requests.post(f"{API_BASE_URL}/register/", json=data)
     if response.status_code == 201:
-        st.success("Регистрация прошла успешно. Теперь вы можете войти.")
+        st.success("Регистрация прошла успешно. Теперь Вы можете войти.")
         return True
     else:
         errors = response.json()
@@ -74,11 +74,17 @@ def main():
 
     if 'access_token' in st.session_state:
         st.write(f"Вы вошли как: **{st.session_state['user']['username']}**")
-        if st.button("Выйти"):
-            for key in ['access_token', 'refresh_token', 'user']:
-                if key in st.session_state:
-                    del st.session_state[key]
-            st.experimental_rerun()
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Перейти к подпискам"):
+                st.switch_page("frontend/subscription_app.py")
+        with col2:
+            if st.button("Выйти"):
+                for key in ['access_token', 'refresh_token', 'user']:
+                    if key in st.session_state:
+                        del st.session_state[key]
+                st.rerun()
         return
 
     tab1, tab2 = st.tabs(["Вход", "Регистрация"])
