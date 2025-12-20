@@ -111,3 +111,26 @@ class PromoCode(models.Model):
     
     def __str__(self):
         return f"{self.code} (-{self.discount_percent}%)"
+    
+
+class RefundPolicy(models.Model):
+    """Модель для хранения политик возврата"""
+    name = models.CharField(max_length=100)
+    description = models.TextField()
+    
+    # Настройки политики
+    full_refund_days = models.IntegerField(default=3, help_text="Дней для полного возврата")
+    partial_refund_enabled = models.BooleanField(default=True)
+    min_refund_percentage = models.IntegerField(
+        default=50, 
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+        help_text="Минимальный процент возврата для частичного возврата"
+    )
+    max_refund_days = models.IntegerField(default=30, help_text="Максимальное количество дней для возврата")
+    is_active = models.BooleanField(default=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    def __str__(self):
+        return self.name
