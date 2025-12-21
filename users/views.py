@@ -2,7 +2,7 @@ from django.shortcuts import render
 
 # Create your views here.
 
-from rest_framework import generics, permissions
+from rest_framework import generics, permissions, viewsets
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -37,3 +37,16 @@ class UserProfileView(generics.RetrieveUpdateAPIView):
 
     def get_object(self):
         return self.request.user
+    
+
+class AdminUserViewSet(viewsets.ReadOnlyModelViewSet):
+    """API для администраторов (получение всех пользователей)"""
+    serializer_class = UserSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get_queryset(self):
+        # Проверяем, что пользователь администратор
+        if self.request.user.role != 'admin' and not self.request.user.is_superuser:
+            return User.objects.none()
+        
+        return User.objects.all().order_by('-date_joined')

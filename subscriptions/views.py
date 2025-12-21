@@ -19,6 +19,7 @@ from .payment_gateway import FakePaymentGateway
 from users.models import User
 from users.models import Notification
 from datetime import timedelta
+from .email_service import send_test_email
 
 logger = logging.getLogger(__name__)
 
@@ -572,59 +573,152 @@ class ManualRenewalCheckView(generics.GenericAPIView):
     permission_classes = [permissions.IsAuthenticated]
     
     def post(self, request):
-        from datetime import timedelta
+        # Проверяем права администратора
+        if not (request.user.role == 'admin' or request.user.is_superuser):
+            return Response(
+                {'error': 'Требуются права администратора'},
+                status=status.HTTP_403_FORBIDDEN
+            )
         
+        from datetime import timedelta
+        from django.utils import timezone
+        from .payment_gateway import FakePaymentGateway
+        
+        # Находим подписки для проверки (заканчиваются в течение 24 часов)
         renewal_date = timezone.now() + timedelta(hours=24)
         
         subscriptions = UserSubscription.objects.filter(
-            user=request.user,
             status='active',
             auto_renew=True,
             end_date__lte=renewal_date,
             end_date__gt=timezone.now()
-        )
+        ).select_related('user', 'plan')
         
         results = []
+        renewed_count = 0
+        failed_count = 0
         
         for subscription in subscriptions:
-            from .payment_gateway import FakePaymentGateway
-            
-            payment_result = FakePaymentGateway.process_payment(
-                amount=float(subscription.plan.price),
-                user_id=request.user.id,
-                description=f"Ручное продление: {subscription.plan.name}"
-            )
-            
-            if payment_result['success']:
-                new_end_date = subscription.end_date + timedelta(days=subscription.plan.duration_days)
-                subscription.end_date = new_end_date
-                subscription.save()
-                
-                Transaction.objects.create(
-                    user=request.user,
-                    subscription=subscription,
-                    amount=subscription.plan.price,
-                    transaction_type='subscription_renewal',
-                    status='completed',
-                    description='Ручное продление',
-                    payment_data=payment_result
+            try:
+                # Имитация платежа
+                payment_result = FakePaymentGateway.process_payment(
+                    amount=float(subscription.plan.price),
+                    user_id=subscription.user.id,
+                    description=f"Ручное продление: {subscription.plan.name}"
                 )
                 
+                if payment_result['success']:
+                    # Продлеваем подписку
+                    new_end_date = subscription.end_date + timedelta(days=subscription.plan.duration_days)
+                    subscription.end_date = new_end_date
+                    subscription.save()
+                    
+                    # Создаем транзакцию
+                    Transaction.objects.create(
+                        user=subscription.user,
+                        subscription=subscription,
+                        amount=subscription.plan.price,
+                        transaction_type='subscription_renewal',
+                        status='completed',
+                        description='Ручное продление (админ)',
+                        payment_data=payment_result
+                    )
+                    
+                    results.append({
+                        'subscription_id': subscription.id,
+                        'user': subscription.user.username,
+                        'plan': subscription.plan.name,
+                        'status': 'renewed',
+                        'new_end_date': new_end_date.isoformat(),
+                        'message': 'Успешно продлено'
+                    })
+                    renewed_count += 1
+                    
+                else:
+                    results.append({
+                        'subscription_id': subscription.id,
+                        'user': subscription.user.username,
+                        'plan': subscription.plan.name,
+                        'status': 'failed',
+                        'error': payment_result['message'],
+                        'message': 'Ошибка платежа'
+                    })
+                    failed_count += 1
+                    
+            except Exception as e:
                 results.append({
                     'subscription_id': subscription.id,
-                    'status': 'renewed',
-                    'new_end_date': new_end_date.isoformat()
+                    'status': 'error',
+                    'error': str(e),
+                    'message': 'Исключение при обработке'
                 })
-            else:
-                results.append({
-                    'subscription_id': subscription.id,
-                    'status': 'failed',
-                    'error': payment_result['message']
-                })
+                failed_count += 1
         
         return Response({
+            'success': True,
             'checked': len(subscriptions),
-            'renewed': len([r for r in results if r['status'] == 'renewed']),
-            'failed': len([r for r in results if r['status'] == 'failed']),
-            'results': results
+            'renewed': renewed_count,
+            'failed': failed_count,
+            'results': results,
+            'message': f'Проверено {len(subscriptions)} подписок. Успешно: {renewed_count}, Ошибок: {failed_count}'
         })
+        
+        
+class SendTestEmailView(generics.GenericAPIView):
+    """Отправка тестового email"""
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def post(self, request):
+        # Проверяем, что пользователь администратор
+        if request.user.role != 'admin' and not request.user.is_superuser:
+            return Response(
+                {'error': 'Требуются права администратора'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        email = request.data.get('email', request.user.email)
+        
+        try:
+            success = send_test_email(email)
+            
+            if success:
+                return Response({
+                    'success': True,
+                    'message': f'Тестовый email отправлен на {email}'
+                })
+            else:
+                return Response({
+                    'success': False,
+                    'message': 'Ошибка отправки email'
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                
+        except Exception as e:
+            return Response({
+                'error': f'Ошибка: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+
+class AdminSubscriptionViewSet(viewsets.ReadOnlyModelViewSet):
+    """API для администраторов (получение всех подписок)"""
+    serializer_class = UserSubscriptionSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get_queryset(self):
+        # Проверяем, что пользователь администратор
+        if self.request.user.role != 'admin' and not self.request.user.is_superuser:
+            return UserSubscription.objects.none()
+        
+        return UserSubscription.objects.all().select_related('user', 'plan').order_by('-created_at')
+
+
+class AdminTransactionViewSet(viewsets.ReadOnlyModelViewSet):
+    """API для администраторов (получение всех транзакций)"""
+    serializer_class = TransactionSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get_queryset(self):
+        # Проверяем, что пользователь администратор
+        if self.request.user.role != 'admin' and not self.request.user.is_superuser:
+            return Transaction.objects.none()
+        
+        return Transaction.objects.all().select_related('user').order_by('-created_at')
