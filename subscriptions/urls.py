@@ -7,6 +7,7 @@ from .views import (
     RefundRequestView, RefundPolicyView,
     TestRenewSubscriptionView, UpdateEndDateView, ManualRenewalCheckView,
     SendTestEmailView, AdminSubscriptionViewSet, AdminTransactionViewSet,
+    NotificationViewSet,
 )
 
 router = DefaultRouter()
@@ -16,6 +17,7 @@ router.register(r'transactions', TransactionViewSet, basename='transaction')
 router.register(r'promocodes', PromoCodeViewSet, basename='promocode')
 router.register(r'admin-subscriptions', AdminSubscriptionViewSet, basename='admin-subscription'),
 router.register(r'admin-transactions', AdminTransactionViewSet, basename='admin-transaction'),
+router.register(r'notifications', NotificationViewSet, basename='notification')
 
 urlpatterns = [
     path('', include(router.urls)),

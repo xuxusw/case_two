@@ -20,6 +20,7 @@ from users.models import User
 from users.models import Notification
 from datetime import timedelta
 from .email_service import send_test_email
+from users.serializers import NotificationSerializer
 
 logger = logging.getLogger(__name__)
 
@@ -943,3 +944,25 @@ class MySubscriptionsView(generics.ListAPIView):
     
     def get_queryset(self):
         return UserSubscription.objects.filter(user=self.request.user).select_related('plan')
+    
+
+class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
+    """API для просмотра уведомлений пользователя"""
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = NotificationSerializer
+    
+    def get_queryset(self):
+        # Возвращаем уведомления только текущего пользователя, сначала новые
+        return Notification.objects.filter(user=self.request.user).order_by('-created_at')
+
+    @action(detail=False, methods=['post'], url_path='mark-all-as-read')
+    def mark_all_as_read(self, request):
+        Notification.objects.filter(user=request.user, is_read=False).update(is_read=True)
+        return Response({'status': 'notifications marked as read'})
+    
+    @action(detail=True, methods=['post'], url_path='mark-as-read')
+    def mark_as_read(self, request, pk=None):
+        notification = self.get_object()
+        notification.is_read = True
+        notification.save()
+        return Response({'status': 'read'})
