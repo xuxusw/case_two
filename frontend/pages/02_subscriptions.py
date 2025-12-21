@@ -155,6 +155,51 @@ def cancel_subscription(subscription_id):
         st.error(f"Ошибка отмены подписки: {e}")
         return None
 
+def toggle_auto_renew(subscription_id, new_state):
+    """Функция для переключения автопродления"""
+    headers = get_auth_headers()
+    if not headers:
+        return None
+    
+    try:
+        # ИСПРАВЛЕНИЕ: Добавлен префикс 'my-subscriptions' в URL
+        url = f"{API_BASE_URL}/subscriptions/my-subscriptions/{subscription_id}/toggle-auto-renew/"
+        
+        # Проверяем, существует ли endpoint с /my-subscriptions/
+        # Если нет, пробуем альтернативный путь
+        try:
+            # Пробуем сначала с /my-subscriptions/
+            response = requests.patch(
+                url,
+                headers=headers,
+                json={"auto_renew": new_state}
+            )
+            
+            # Если получили 404, пробуем другой вариант
+            if response.status_code == 404:
+                # Альтернативный URL (без my-subscriptions)
+                alt_url = f"{API_BASE_URL}/subscriptions/{subscription_id}/toggle-auto-renew/"
+                response = requests.patch(
+                    alt_url,
+                    headers=headers,
+                    json={"auto_renew": new_state}
+                )
+                
+        except requests.exceptions.ConnectionError:
+            # Если ошибка соединения при первом запросе, пробуем альтернативный
+            alt_url = f"{API_BASE_URL}/subscriptions/{subscription_id}/toggle-auto-renew/"
+            response = requests.patch(
+                alt_url,
+                headers=headers,
+                json={"auto_renew": new_state}
+            )
+        
+        return response
+        
+    except Exception as e:
+        st.error(f"Ошибка переключения автопродления: {e}")
+        return None
+
 def format_date(date_string):
     if not date_string:
         return "Не указано"
@@ -204,9 +249,7 @@ def display_subscription_card(subscription):
     }.get(subscription['status'], subscription['status'])
     
     with st.container():
-        # ИСПРАВЛЕНИЕ: Получаем данные из правильных полей
-        # subscription['plan'] - это ID (число), а не объект
-        # Используем plan_name и plan_price которые уже есть в данных
+        # Получаем данные из правильных полей
         plan_name = subscription.get('plan_name', 'Неизвестный тариф')
         plan_price = subscription.get('plan_price', 0)
         
@@ -239,7 +282,8 @@ def display_subscription_card(subscription):
         </div>
         """, unsafe_allow_html=True)
         
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
+        
         with col1:
             if subscription.get('status') == 'active':
                 if st.button("Отменить подписку", key=f"cancel_{subscription['id']}"):
@@ -251,7 +295,37 @@ def display_subscription_card(subscription):
                         st.error(f"Ошибка: {response.status_code} - {response.text}")
                     else:
                         st.error("Ошибка отмены подписки")
+        
         with col2:
+            if subscription.get('status') == 'active':
+                auto_renew = subscription.get('auto_renew', False)
+                button_text = "Выключить автопродление" if auto_renew else "Включить автопродление"
+                button_type = "secondary" if auto_renew else "primary"
+                
+                if st.button(button_text, key=f"toggle_{subscription['id']}", type=button_type):
+                    # ИСПРАВЛЕННЫЙ ВЫЗОВ ФУНКЦИИ
+                    new_state = not auto_renew
+                    response = toggle_auto_renew(subscription['id'], new_state)
+                    
+                    if response:
+                        if response.status_code == 200:
+                            data = response.json()
+                            status_msg = "включено" if data.get('auto_renew') else "выключено"
+                            st.success(f"Автопродление успешно {status_msg}")
+                            st.rerun()
+                        else:
+                            try:
+                                # Пробуем получить JSON ошибки
+                                error_data = response.json()
+                                error_msg = error_data.get('error', error_data.get('message', 'Неизвестная ошибка'))
+                            except:
+                                # Если не JSON, показываем статус
+                                error_msg = f"HTTP {response.status_code}"
+                            st.error(f"Ошибка: {error_msg}")
+                    else:
+                        st.error("Ошибка соединения с сервером")
+        
+        with col3:
             if subscription.get('status') == 'expired':
                 if st.button("Продлить", key=f"renew_{subscription['id']}"):
                     st.info("Функция продления будет доступна в следующем обновлении")
@@ -297,7 +371,7 @@ def main():
             elif sort_by == "Цена (убыв.)":
                 plans = sorted(plans, key=lambda x: float(x['price']) if isinstance(x['price'], str) else x['price'], reverse=True)
             
-            # ИСПРАВЛЕНИЕ: Убедимся, что есть хотя бы 1 колонка
+            # Убедимся, что есть хотя бы 1 колонка
             num_cols = max(1, min(3, len(plans)))
             cols = st.columns(num_cols)
             selected_plan = None
@@ -357,7 +431,12 @@ def main():
                                 data = response.json()
                                 st.error(f"Ошибка платежа: {data.get('message', 'Неизвестная ошибка')}")
                             else:
-                                st.error(f"Ошибка: {response.status_code} - {response.text}")
+                                try:
+                                    error_data = response.json()
+                                    error_msg = error_data.get('error', error_data.get('message', 'Неизвестная ошибка'))
+                                except:
+                                    error_msg = f"HTTP {response.status_code}"
+                                st.error(f"Ошибка: {error_msg}")
     
     with tab2:
         st.header("Мои подписки")
@@ -464,7 +543,7 @@ def main():
             if show_only_valid:
                 promocodes = [p for p in promocodes if p.get('is_valid', False)]
             
-            # ИСПРАВЛЕНИЕ: Проверяем, что promocodes не пустой после фильтрации
+            # Проверяем, что promocodes не пустой после фильтрации
             if promocodes:
                 # Используем минимум 1 колонку
                 num_cols = max(1, min(3, len(promocodes)))

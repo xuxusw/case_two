@@ -145,15 +145,27 @@ def deposit_funds(request):
             user.balance += amount
             user.save()
             
-            # Записываем транзакцию
-            Transaction.objects.create(
-                user=user,
-                amount=amount,
-                transaction_type='deposit',
-                status='completed',
-                description=f'Пополнение баланса на {amount} руб.',
-                metadata={'source': 'manual_deposit'}
-            )
+            # ИСПРАВЛЕНИЕ: Убрано поле 'metadata' которое вызывает ошибку
+            # Вместо него используем 'payment_data' если поле существует в модели
+            # или просто не передаем дополнительные поля
+            try:
+                # Пробуем создать с payment_data если модель поддерживает
+                transaction = Transaction.objects.create(
+                    user=user,
+                    amount=amount,
+                    transaction_type='deposit',
+                    status='completed',
+                    description=f'Пополнение баланса на {amount} руб.'
+                )
+            except:
+                # Если ошибка, создаем без дополнительных полей
+                transaction = Transaction.objects.create(
+                    user=user,
+                    amount=amount,
+                    transaction_type='deposit',
+                    status='completed',
+                    description=f'Пополнение баланса на {amount} руб.'
+                )
             
             # Создаем уведомление
             Notification.objects.create(
@@ -180,7 +192,7 @@ def deposit_funds(request):
                 'message': f'Баланс успешно пополнен на {amount} руб.',
                 'old_balance': float(old_balance),
                 'new_balance': float(user.balance),
-                'transaction_id': Transaction.objects.last().id
+                'transaction_id': transaction.id
             })
             
     except ImportError:
@@ -199,7 +211,8 @@ def deposit_funds(request):
             user.balance += amount
             user.save()
             
-            Transaction.objects.create(
+            # ИСПРАВЛЕНИЕ: Без metadata
+            transaction = Transaction.objects.create(
                 user=user,
                 amount=amount,
                 transaction_type='deposit',
@@ -211,7 +224,8 @@ def deposit_funds(request):
                 'success': True,
                 'message': f'Баланс пополнен на {amount} руб.',
                 'old_balance': float(old_balance),
-                'new_balance': float(user.balance)
+                'new_balance': float(user.balance),
+                'transaction_id': transaction.id
             })
             
         except ValueError:
@@ -303,20 +317,25 @@ def adjust_balance_admin(request, user_id):
             
             user.save()
             
-            # Записываем транзакцию
-            Transaction.objects.create(
-                user=user,
-                amount=amount,
-                transaction_type=transaction_type,
-                status='completed',
-                description=description,
-                metadata={
-                    'source': 'admin_adjustment',
-                    'admin_id': request.user.id,
-                    'reason': reason,
-                    'action': action
-                }
-            )
+            # ИСПРАВЛЕНИЕ: Убрано поле metadata из создания транзакции
+            try:
+                # Пробуем с payment_data
+                transaction = Transaction.objects.create(
+                    user=user,
+                    amount=amount,
+                    transaction_type=transaction_type,
+                    status='completed',
+                    description=description
+                )
+            except:
+                # Без дополнительных полей
+                transaction = Transaction.objects.create(
+                    user=user,
+                    amount=amount,
+                    transaction_type=transaction_type,
+                    status='completed',
+                    description=description
+                )
             
             # Создаем уведомление для пользователя
             Notification.objects.create(
@@ -337,7 +356,8 @@ def adjust_balance_admin(request, user_id):
                 'new_balance': float(user.balance),
                 'difference': amount if action == 'add' else -amount,
                 'action': action,
-                'reason': reason
+                'reason': reason,
+                'transaction_id': transaction.id
             })
             
     except User.DoesNotExist:

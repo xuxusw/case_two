@@ -31,7 +31,7 @@ def main():
     st.markdown("---")
     
     try:
-        # Получаем текущий баланс
+        # Получаем текущий баланс (ИСПРАВЛЕННЫЙ ПУТЬ)
         balance_response = requests.get(
             f"{API_BASE_URL}/auth/balance/",
             headers=headers
@@ -50,9 +50,9 @@ def main():
                     help="Доступная сумма для оплаты подписок"
                 )
             
-            # Получаем информацию о пользователе
+            # Получаем информацию о пользователе (ИСПРАВЛЕННЫЙ ПУТЬ)
             profile_response = requests.get(
-                f"{API_BASE_URL}/users/profile/full/",
+                f"{API_BASE_URL}/auth/profile/full/",
                 headers=headers
             )
             
@@ -113,8 +113,9 @@ def main():
                         st.warning("Введите сумму больше 0")
                     else:
                         with st.spinner("Обработка платежа..."):
+                            # ИСПРАВЛЕННЫЙ ПУТЬ: /auth/deposit/ вместо /users/deposit/
                             deposit_response = requests.post(
-                                f"{API_BASE_URL}/users/deposit/",
+                                f"{API_BASE_URL}/auth/deposit/",
                                 headers=headers,
                                 json={"amount": float(amount)}
                             )
@@ -133,12 +134,16 @@ def main():
                                 # Обновляем страницу
                                 st.rerun()
                             else:
-                                error_data = deposit_response.json()
-                                st.error(f"Ошибка: {error_data.get('error', 'Неизвестная ошибка')}")
+                                try:
+                                    error_data = deposit_response.json()
+                                    error_msg = error_data.get('error', 'Неизвестная ошибка')
+                                except:
+                                    error_msg = f"HTTP {deposit_response.status_code}"
+                                st.error(f"Ошибка: {error_msg}")
             
             st.markdown("---")
             
-            # Раздел управления автопродлением (ИСПРАВЛЕННЫЙ)
+            # Раздел управления автопродлением
             st.subheader("Управление автопродлением")
             
             # Получаем подписки пользователя
@@ -162,10 +167,13 @@ def main():
                             with cols[0]:
                                 st.write(f"**{subscription.get('plan_name')}**")
                                 if subscription.get('end_date'):
-                                    end_date = datetime.fromisoformat(
-                                        subscription.get('end_date').replace('Z', '+00:00')
-                                    )
-                                    st.caption(f"Действует до: {end_date.strftime('%d.%m.%Y')}")
+                                    try:
+                                        end_date = datetime.fromisoformat(
+                                            subscription.get('end_date').replace('Z', '+00:00')
+                                        )
+                                        st.caption(f"Действует до: {end_date.strftime('%d.%m.%Y')}")
+                                    except:
+                                        st.caption(f"Действует до: {subscription.get('end_date')}")
                             
                             with cols[1]:
                                 st.write(f"Цена: {subscription.get('plan_price')} руб.")
@@ -178,31 +186,41 @@ def main():
                                           unsafe_allow_html=True)
                             
                             with cols[3]:
-                                # Кнопка переключения (ИСПРАВЛЕННЫЙ URL)
+                                # ИСПРАВЛЕННЫЙ URL для переключения автопродления
                                 if auto_renew:
-                                    if st.button("Выключить", key=f"off_{subscription.get('id')}"):
-                                        response = requests.patch(
-                                            f"{API_BASE_URL}/subscriptions/{subscription.get('id')}/toggle-auto-renew/",
-                                            headers=headers,
-                                            json={"auto_renew": False}
-                                        )
-                                        if response.status_code == 200:
-                                            st.success("Автопродление отключено")
-                                            st.rerun()
-                                        else:
-                                            st.error(f"Ошибка: {response.json().get('error', 'Неизвестная ошибка')}")
+                                    if st.button("Выключить", key=f"off_{subscription.get('id')}", type="secondary"):
+                                        try:
+                                            # ИСПРАВЛЕНО: добавлен префикс 'my-subscriptions'
+                                            response = requests.patch(
+                                                f"{API_BASE_URL}/subscriptions/my-subscriptions/{subscription.get('id')}/toggle-auto-renew/",
+                                                headers=headers,
+                                                json={"auto_renew": False}
+                                            )
+                                            if response.status_code == 200:
+                                                st.success("Автопродление отключено")
+                                                st.rerun()
+                                            else:
+                                                error_data = response.json()
+                                                st.error(f"Ошибка: {error_data.get('error', 'Неизвестная ошибка')}")
+                                        except Exception as e:
+                                            st.error(f"Ошибка соединения: {str(e)}")
                                 else:
-                                    if st.button("Включить", key=f"on_{subscription.get('id')}"):
-                                        response = requests.patch(
-                                            f"{API_BASE_URL}/subscriptions/{subscription.get('id')}/toggle-auto-renew/",
-                                            headers=headers,
-                                            json={"auto_renew": True}
-                                        )
-                                        if response.status_code == 200:
-                                            st.success("Автопродление включено")
-                                            st.rerun()
-                                        else:
-                                            st.error(f"Ошибка: {response.json().get('error', 'Неизвестная ошибка')}")
+                                    if st.button("Включить", key=f"on_{subscription.get('id')}", type="primary"):
+                                        try:
+                                            # ИСПРАВЛЕНО: добавлен префикс 'my-subscriptions'
+                                            response = requests.patch(
+                                                f"{API_BASE_URL}/subscriptions/my-subscriptions/{subscription.get('id')}/toggle-auto-renew/",
+                                                headers=headers,
+                                                json={"auto_renew": True}
+                                            )
+                                            if response.status_code == 200:
+                                                st.success("Автопродление включено")
+                                                st.rerun()
+                                            else:
+                                                error_data = response.json()
+                                                st.error(f"Ошибка: {error_data.get('error', 'Неизвестная ошибка')}")
+                                        except Exception as e:
+                                            st.error(f"Ошибка соединения: {str(e)}")
                             
                             st.divider()
                     
@@ -259,9 +277,12 @@ def main():
                         )
                         
                         # Форматируем дату
-                        created_at = datetime.fromisoformat(
-                            transaction.get('created_at', '').replace('Z', '+00:00')
-                        ).strftime('%d.%m.%Y %H:%M')
+                        try:
+                            created_at = datetime.fromisoformat(
+                                transaction.get('created_at', '').replace('Z', '+00:00')
+                            ).strftime('%d.%m.%Y %H:%M')
+                        except:
+                            created_at = transaction.get('created_at', '')
                         
                         # Определяем цвет суммы
                         amount_color = '#4CAF50' if transaction.get('transaction_type') == 'deposit' else '#F44336'
@@ -300,6 +321,8 @@ def main():
         else:
             st.error("Ошибка загрузки баланса")
             
+    except requests.exceptions.ConnectionError:
+        st.error("Ошибка подключения к серверу. Проверьте, запущен ли бэкенд.")
     except Exception as e:
         st.error(f"Ошибка: {str(e)}")
     

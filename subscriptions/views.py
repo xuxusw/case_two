@@ -95,18 +95,26 @@ class UserSubscriptionViewSet(viewsets.ModelViewSet):
         
         return Response({'message': 'Функция продления будет позже'})
     
-    @action(detail=True, methods=['patch'])
+    # ИСПРАВЛЕНИЕ: Добавлен url_path для корректной работы с роутером
+    @action(detail=True, methods=['patch'], url_path='toggle-auto-renew')
     def toggle_auto_renew(self, request, pk=None):
         """Включение/выключение автопродления"""
         subscription = self.get_object()
         
+        # Проверяем, активна ли подписка
+        if subscription.status != 'active':
+            return Response({
+                'error': 'Автопродление можно менять только для активных подписок'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
         auto_renew = request.data.get('auto_renew')
         if auto_renew is None:
-            return Response({'error': 'Укажите auto_renew (true/false)'}, 
-                        status=status.HTTP_400_BAD_REQUEST)
+            # Если auto_renew не указан, просто инвертируем текущее значение
+            subscription.auto_renew = not subscription.auto_renew
+        else:
+            subscription.auto_renew = bool(auto_renew)
         
-        old_value = subscription.auto_renew
-        subscription.auto_renew = bool(auto_renew)
+        old_value = not subscription.auto_renew if auto_renew is None else bool(auto_renew)
         subscription.save()
         
         # Создаем уведомление
@@ -130,7 +138,8 @@ class UserSubscriptionViewSet(viewsets.ModelViewSet):
         return Response({
             'success': True,
             'message': f'Автопродление {status_text}',
-            'auto_renew': subscription.auto_renew
+            'auto_renew': subscription.auto_renew,
+            'subscription_status': subscription.status
         })
 
 
@@ -219,7 +228,7 @@ class PurchaseSubscriptionView(generics.CreateAPIView):
                         is_read=False,
                         data={
                             'subscription_id': subscription.id,
-                            'plan_name': plan.name,
+                            'plan_name': subscription.plan.name,
                             'amount': str(price),
                             'end_date': subscription.end_date.isoformat(),
                             'discount_percent': discount_percent if promo else 0
