@@ -8,7 +8,11 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('username', 'password', 'password2', 'email', 'first_name', 'last_name', 'phone')
+        fields = ('email', 'password', 'password2', 'first_name', 'last_name')
+        extra_kwargs = {
+            'first_name': {'required': True},
+            'last_name': {'required': True}
+        }
 
     def validate(self, attrs):
         if attrs['password'] != attrs['password2']:
@@ -17,11 +21,10 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         user = User.objects.create(
-            username=validated_data['username'],
-            email=validated_data.get('email', ''),
+            email=validated_data['email'],
             first_name=validated_data.get('first_name', ''),
             last_name=validated_data.get('last_name', ''),
-            phone=validated_data.get('phone', ''),
+            username=validated_data['email']
         )
         user.set_password(validated_data['password'])
         user.save()
@@ -30,4 +33,16 @@ class RegisterSerializer(serializers.ModelSerializer):
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'balance', 'phone')
+        fields = ('id', 'username', 'email', 'first_name', 'last_name', 
+                  'role', 'balance', 'is_active', 'date_joined')
+        read_only_fields = ('id', 'date_joined', 'balance')
+
+
+class UserBalanceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ('id', 'username', 'email', 'balance')
+        read_only_fields = fields
+
+class DepositSerializer(serializers.Serializer):
+    amount = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=0)

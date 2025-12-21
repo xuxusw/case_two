@@ -4,7 +4,7 @@ from django.db import models
 
 from django.conf import settings
 from django.utils import timezone
-from django.core.validators import MinValueValidator, MaxValueValidator  # Изменено здесь
+from django.core.validators import MinValueValidator, MaxValueValidator  
 import uuid
 
 class SubscriptionPlan(models.Model):

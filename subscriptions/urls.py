@@ -34,5 +34,7 @@ urlpatterns = [
     
     # Email уведомления
     path('send-test-email/', SendTestEmailView.as_view(), name='send-test-email'),
-
+    
+    path('subscriptions/<int:pk>/toggle-auto-renew/', UserSubscriptionViewSet.as_view({'patch': 'toggle_auto_renew'}), name='toggle_auto_renew'),
+    
 ]

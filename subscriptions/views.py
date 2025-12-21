@@ -23,10 +23,12 @@ from .email_service import send_test_email
 
 logger = logging.getLogger(__name__)
 
+
 class SubscriptionPlanViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = SubscriptionPlan.objects.filter(is_active=True)
     serializer_class = SubscriptionPlanSerializer
     permission_classes = [permissions.AllowAny]
+
 
 class UserSubscriptionViewSet(viewsets.ModelViewSet):
     serializer_class = UserSubscriptionSerializer
@@ -42,19 +44,45 @@ class UserSubscriptionViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Только активные подписки можно отменить'}, 
                           status=status.HTTP_400_BAD_REQUEST)
         
+        old_status = subscription.status
         subscription.status = 'canceled'
         subscription.auto_renew = False
         subscription.save()
         
-        # запись в истории
+        # Запись в истории
         Transaction.objects.create(
             user=request.user,
             subscription=subscription,
             amount=0,
-            transaction_type='subscription_purchase',
+            transaction_type='subscription_cancel',
             status='completed',
             description='Подписка отменена пользователем'
         )
+        
+        # Создаем уведомление об отмене
+        try:
+            Notification.objects.create(
+                user=request.user,
+                notification_type='subscription_canceled',
+                title='Подписка отменена',
+                message=f'Подписка "{subscription.plan.name}" отменена. Статус изменен: {old_status} -> {subscription.status}',
+                is_read=False,
+                data={
+                    'subscription_id': subscription.id,
+                    'plan_name': subscription.plan.name,
+                    'old_status': old_status,
+                    'new_status': subscription.status,
+                    'end_date': subscription.end_date.isoformat() if subscription.end_date else None
+                }
+            )
+            
+            # Логируем email уведомление
+            logger.info(f"EMAIL: Отправка уведомления об отмене подписки пользователю {request.user.email}")
+            logger.info(f"EMAIL Тема: Подписка '{subscription.plan.name}' отменена")
+            logger.info(f"EMAIL Сообщение: Ваша подписка '{subscription.plan.name}' была отменена.")
+            
+        except Exception as e:
+            logger.error(f"Ошибка при создании уведомления: {e}")
         
         return Response({'status': 'Подписка отменена'})
     
@@ -65,8 +93,46 @@ class UserSubscriptionViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Невозможно продлить эту подписку'}, 
                           status=status.HTTP_400_BAD_REQUEST)
         
-        # сюда нужна логика продления
         return Response({'message': 'Функция продления будет позже'})
+    
+    @action(detail=True, methods=['patch'])
+    def toggle_auto_renew(self, request, pk=None):
+        """Включение/выключение автопродления"""
+        subscription = self.get_object()
+        
+        auto_renew = request.data.get('auto_renew')
+        if auto_renew is None:
+            return Response({'error': 'Укажите auto_renew (true/false)'}, 
+                        status=status.HTTP_400_BAD_REQUEST)
+        
+        old_value = subscription.auto_renew
+        subscription.auto_renew = bool(auto_renew)
+        subscription.save()
+        
+        # Создаем уведомление
+        status_text = "включено" if subscription.auto_renew else "выключено"
+        Notification.objects.create(
+            user=request.user,
+            notification_type='info',
+            title='Настройки автопродления изменены',
+            message=f'Автоматическое продление для подписки "{subscription.plan.name}" {status_text}',
+            data={
+                'subscription_id': subscription.id,
+                'plan_name': subscription.plan.name,
+                'auto_renew': subscription.auto_renew,
+                'old_auto_renew': old_value
+            }
+        )
+        
+        logger.info(f"Пользователь {request.user.username} изменил автопродление "
+                    f"подписки {subscription.id}: {old_value} -> {subscription.auto_renew}")
+        
+        return Response({
+            'success': True,
+            'message': f'Автопродление {status_text}',
+            'auto_renew': subscription.auto_renew
+        })
+
 
 class PurchaseSubscriptionView(generics.CreateAPIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -81,7 +147,7 @@ class PurchaseSubscriptionView(generics.CreateAPIView):
         promo = data.get('promo')
         user = request.user
         
-        # цена с учетом промокода
+        # Цена с учетом промокода
         price = plan.price
         discount_percent = 0
         
@@ -89,37 +155,48 @@ class PurchaseSubscriptionView(generics.CreateAPIView):
             discount_percent = promo.discount_percent
             price = plan.price * (100 - discount_percent) / 100
         
+        # Проверяем, достаточно ли средств у пользователя
+        if user.balance < price:
+            return Response({
+                'success': False,
+                'message': f'Недостаточно средств на балансе. Необходимо: {price} руб., доступно: {user.balance} руб.'
+            }, status=status.HTTP_402_PAYMENT_REQUIRED)
+        
         with db_transaction.atomic():
-            # создание подписки в статусе pending
+            # Создание подписки в статусе pending
             subscription = UserSubscription.objects.create(
                 user=user,
                 plan=plan,
                 status='pending'
             )
             
-            # создание транзакции
+            # Создание транзакции
             transaction = Transaction.objects.create(
                 user=user,
                 subscription=subscription,
                 amount=price,
                 transaction_type='subscription_purchase',
                 status='pending',
-                description=f'Покупка подписки {plan.name}'
+                description=f'Покупка подписки {plan.name}' + (f' (скидка {discount_percent}%)' if promo else '')
             )
             
-            # Обработка платежа
+            # Обработка платежа через фейковый шлюз
             payment_result = FakePaymentGateway.process_payment(
                 amount=float(price),
                 user_id=user.id,
                 description=f"Подписка: {plan.name}"
             )
             
-            # обновление статуса транзакции
+            # Обновление статуса транзакции
             transaction.payment_data = payment_result
             if payment_result['success']:
+                # Списание средств с баланса пользователя
+                user.balance -= price
+                user.save()
+                
                 transaction.status = 'completed'
                 
-                # активация подписки
+                # Активация подписки
                 subscription.status = 'active'
                 subscription.start_date = timezone.now()
                 subscription.end_date = timezone.now() + timezone.timedelta(days=plan.duration_days)
@@ -132,6 +209,37 @@ class PurchaseSubscriptionView(generics.CreateAPIView):
                 subscription.save()
                 transaction.save()
                 
+                # Создаем уведомление об успешной покупке
+                try:
+                    Notification.objects.create(
+                        user=user,
+                        notification_type='payment_success',
+                        title='Подписка оформлена',
+                        message=f'Вы успешно подписались на тариф "{plan.name}" за {price} руб. Подписка активна до {subscription.end_date.strftime("%d.%m.%Y")}',
+                        is_read=False,
+                        data={
+                            'subscription_id': subscription.id,
+                            'plan_name': plan.name,
+                            'amount': str(price),
+                            'end_date': subscription.end_date.isoformat(),
+                            'discount_percent': discount_percent if promo else 0
+                        }
+                    )
+                    
+                    # Логируем email уведомление
+                    logger.info("=" * 60)
+                    logger.info("EMAIL УВЕДОМЛЕНИЕ (симуляция):")
+                    logger.info(f"Кому: {user.email}")
+                    logger.info(f"Тема: Подписка на {plan.name} оформлена!")
+                    logger.info(f"Сообщение: Вы успешно подписались на тариф '{plan.name}'")
+                    logger.info(f"Сумма: {price} руб." + (f" (скидка {discount_percent}%)" if promo else ""))
+                    logger.info(f"Статус: Активна до {subscription.end_date.strftime('%d.%m.%Y')}")
+                    logger.info(f"Новый баланс: {user.balance} руб.")
+                    logger.info("=" * 60)
+                    
+                except Exception as e:
+                    logger.error(f"Ошибка при создании уведомления: {e}")
+                
                 logger.info(f"Подписка активирована для пользователя {user.username}, сумма: {price}")
                 
                 return Response({
@@ -139,21 +247,41 @@ class PurchaseSubscriptionView(generics.CreateAPIView):
                     'message': 'Подписка успешно оформлена',
                     'subscription_id': subscription.id,
                     'transaction_id': transaction.id,
-                    'end_date': subscription.end_date
+                    'end_date': subscription.end_date,
+                    'new_balance': float(user.balance)
                 }, status=status.HTTP_201_CREATED)
             else:
                 transaction.status = 'failed'
-                subscription.status = 'expired'  # или pending для retry
+                subscription.status = 'expired'
                 subscription.save()
                 transaction.save()
                 
-                logger.error(f"Ошибка платежа для пользователя {user.username}: {payment_result['message']}")
+                # Создаем уведомление об ошибке
+                try:
+                    Notification.objects.create(
+                        user=user,
+                        notification_type='payment_failed',
+                        title='Ошибка оплаты',
+                        message=f'Не удалось оплатить подписку "{plan.name}". Причина: {payment_result["message"]}',
+                        is_read=False,
+                        data={
+                            'plan_name': plan.name,
+                            'amount': str(price),
+                            'error': payment_result["message"]
+                        }
+                    )
+                    
+                    logger.error(f"Ошибка платежа для пользователя {user.username}: {payment_result['message']}")
+                    
+                except Exception as e:
+                    logger.error(f"Ошибка при создании уведомления об ошибке: {e}")
                 
                 return Response({
                     'success': False,
                     'message': f'Ошибка платежа: {payment_result["message"]}',
                     'transaction_id': transaction.id
                 }, status=status.HTTP_402_PAYMENT_REQUIRED)
+
 
 class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = TransactionSerializer
@@ -162,18 +290,18 @@ class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         return Transaction.objects.filter(user=self.request.user)
 
+
 class PromoCodeViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = PromoCode.objects.filter(is_active=True)
     serializer_class = PromoCodeSerializer
     permission_classes = [permissions.IsAuthenticated]
+
 
 class UserBalanceView(generics.GenericAPIView):
     permission_classes = [permissions.IsAuthenticated]
     
     def get(self, request):
         user = request.user
-        # Здесь надо бы проверку баланса в платежной системе
-        # Но пока - баланс из модели User
         payment_balance = FakePaymentGateway.check_balance(user.id)
         
         return Response({
@@ -181,77 +309,70 @@ class UserBalanceView(generics.GenericAPIView):
             'payment_gateway_balance': payment_balance['balance'],
             'currency': 'RUB'
         })
-        
-# class RefundRequestView(generics.CreateAPIView):
-#     permission_classes = [permissions.IsAuthenticated]
+
+
+class NotificationView(generics.ListAPIView):
+    """Получить все уведомления пользователя"""
+    permission_classes = [permissions.IsAuthenticated]
     
-#     def post(self, request, *args, **kwargs):
-#         transaction_id = request.data.get('transaction_id')
+    def get_queryset(self):
+        return Notification.objects.filter(user=self.request.user)
+    
+    def list(self, request, *args, **kwargs):
+        notifications = self.get_queryset()
+        data = []
         
-#         try:
-#             transaction = Transaction.objects.get(
-#                 id=transaction_id,
-#                 user=request.user,
-#                 status='completed',
-#                 transaction_type__in=['subscription_purchase', 'subscription_renewal']
-#             )
+        for notification in notifications:
+            data.append({
+                'id': notification.id,
+                'notification_type': notification.notification_type,
+                'title': notification.title,
+                'message': notification.message,
+                'data': notification.data,
+                'is_read': notification.is_read,
+                'created_at': notification.created_at.isoformat()
+            })
+        
+        return Response(data)
+
+
+class MarkNotificationReadView(generics.GenericAPIView):
+    """Пометить уведомление как прочитанное"""
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def post(self, request, notification_id):
+        try:
+            notification = Notification.objects.get(
+                id=notification_id,
+                user=request.user
+            )
+            notification.is_read = True
+            notification.save()
             
-#             # Проверяем, что прошло не более 24 часов
-#             time_since_purchase = timezone.now() - transaction.created_at
-#             if time_since_purchase.total_seconds() > 24 * 3600:
-#                 return Response(
-#                     {'error': 'Возврат возможен только в течение 24 часов после покупки'},
-#                     status=status.HTTP_400_BAD_REQUEST
-#                 )
+            return Response({'success': True})
             
-#             # Выполняем возврат через платежную систему
-#             refund_result = FakePaymentGateway.refund_payment(
-#                 original_transaction_id=transaction.payment_data.get('transaction_id'),
-#                 amount=float(transaction.amount)
-#             )
-            
-#             if refund_result['success']:
-#                 # Создаем транзакцию возврата
-#                 refund_transaction = Transaction.objects.create(
-#                     user=request.user,
-#                     subscription=transaction.subscription,
-#                     amount=transaction.amount,
-#                     transaction_type='refund',
-#                     status='completed',
-#                     description=f'Возврат средств по транзакции {transaction.id}',
-#                     payment_data=refund_result
-#                 )
-                
-#                 # Отменяем подписку если есть
-#                 if transaction.subscription:
-#                     subscription = transaction.subscription
-#                     subscription.status = 'canceled'
-#                     subscription.save()
-                
-#                 # Создаем уведомление
-#                 Notification.objects.create(
-#                     user=request.user,
-#                     notification_type='refund_processed',
-#                     title='Возврат средств',
-#                     message=f'Возврат средств в размере {transaction.amount} RUB успешно обработан',
-#                     data={'transaction_id': refund_transaction.id}
-#                 )
-                
-#                 return Response({
-#                     'success': True,
-#                     'refund_id': refund_transaction.id,
-#                     'amount': transaction.amount
-#                 })
-#             else:
-#                 return Response({
-#                     'error': f'Ошибка возврата: {refund_result["message"]}'
-#                 }, status=status.HTTP_400_BAD_REQUEST)
-                
-#         except Transaction.DoesNotExist:
-#             return Response(
-#                 {'error': 'Транзакция не найдена или не подлежит возврату'},
-#                 status=status.HTTP_404_NOT_FOUND
-#             )
+        except Notification.DoesNotExist:
+            return Response(
+                {'error': 'Уведомление не найдено'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+
+class MarkAllNotificationsReadView(generics.GenericAPIView):
+    """Пометить все уведомления как прочитанные"""
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def post(self, request):
+        updated = Notification.objects.filter(
+            user=request.user,
+            is_read=False
+        ).update(is_read=True)
+        
+        return Response({
+            'success': True,
+            'marked_read': updated
+        })
+
 
 class RefundRequestView(generics.CreateAPIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -366,6 +487,11 @@ class RefundRequestView(generics.CreateAPIView):
                         payment_data=refund_result
                     )
                     
+                    # Возвращаем средства на баланс пользователя
+                    user = request.user
+                    user.balance += Decimal(str(refund_amount))
+                    user.save()
+                    
                     # Обновляем подписку если есть
                     if transaction.subscription:
                         subscription = transaction.subscription
@@ -411,18 +537,27 @@ class RefundRequestView(generics.CreateAPIView):
                                 )
                     
                     # Создаем уведомление о возврате
-                    Notification.objects.create(
-                        user=request.user,
-                        notification_type='refund_processed',
-                        title='Возврат средств',
-                        message=f'Возврат средств в размере {refund_amount:.2f} RUB успешно обработан. {refund_reason_text}',
-                        data={
-                            'transaction_id': refund_transaction.id,
-                            'refund_amount': refund_amount,
-                            'original_amount': float(transaction.amount),
-                            'refund_percentage': (refund_amount / float(transaction.amount)) * 100 if transaction.amount > 0 else 0
-                        }
-                    )
+                    try:
+                        Notification.objects.create(
+                            user=request.user,
+                            notification_type='refund_processed',
+                            title='Возврат средств',
+                            message=f'Возврат средств в размере {refund_amount:.2f} RUB успешно обработан. {refund_reason_text}',
+                            data={
+                                'transaction_id': refund_transaction.id,
+                                'refund_amount': refund_amount,
+                                'original_amount': float(transaction.amount),
+                                'refund_percentage': (refund_amount / float(transaction.amount)) * 100 if transaction.amount > 0 else 0
+                            }
+                        )
+                        
+                        # Логируем email уведомление
+                        logger.info(f"EMAIL: Возврат средств пользователю {user.email}")
+                        logger.info(f"EMAIL: Сумма возврата: {refund_amount} руб.")
+                        logger.info(f"EMAIL: Новый баланс: {user.balance} руб.")
+                        
+                    except Exception as e:
+                        logger.error(f"Ошибка при создании уведомления о возврате: {e}")
                     
                     return Response({
                         'success': True,
@@ -430,6 +565,7 @@ class RefundRequestView(generics.CreateAPIView):
                         'refund_amount': refund_amount,
                         'original_amount': transaction.amount,
                         'refund_reason': refund_reason_text,
+                        'new_balance': float(user.balance),
                         'message': 'Возврат средств успешно обработан'
                     })
                 else:
@@ -502,8 +638,6 @@ class TestRenewSubscriptionView(generics.GenericAPIView):
             )
             
             # Имитируем платеж
-            from .payment_gateway import FakePaymentGateway
-            
             payment_result = FakePaymentGateway.process_payment(
                 amount=float(subscription.plan.price),
                 user_id=request.user.id,
@@ -518,7 +652,7 @@ class TestRenewSubscriptionView(generics.GenericAPIView):
                 subscription.save()
                 
                 # Создаем транзакцию
-                Transaction.objects.create(
+                transaction = Transaction.objects.create(
                     user=request.user,
                     subscription=subscription,
                     amount=subscription.plan.price,
@@ -527,6 +661,26 @@ class TestRenewSubscriptionView(generics.GenericAPIView):
                     description='Тестовое продление (ручное)',
                     payment_data=payment_result
                 )
+                
+                # Создаем уведомление
+                try:
+                    Notification.objects.create(
+                        user=request.user,
+                        notification_type='payment_success',
+                        title='Подписка продлена',
+                        message=f'Подписка "{subscription.plan.name}" продлена до {new_end_date.strftime("%d.%m.%Y")}',
+                        data={
+                            'subscription_id': subscription.id,
+                            'plan_name': subscription.plan.name,
+                            'new_end_date': new_end_date.isoformat(),
+                            'amount': str(subscription.plan.price)
+                        }
+                    )
+                    
+                    logger.info(f"EMAIL: Подписка продлена для пользователя {request.user.email}")
+                    
+                except Exception as e:
+                    logger.error(f"Ошибка при создании уведомления о продлении: {e}")
                 
                 return Response({
                     'success': True,
@@ -541,6 +695,7 @@ class TestRenewSubscriptionView(generics.GenericAPIView):
                 
         except UserSubscription.DoesNotExist:
             return Response({'error': 'Подписка не найдена'}, status=status.HTTP_404_NOT_FOUND)
+
 
 class UpdateEndDateView(generics.GenericAPIView):
     """Обновление даты окончания для тестирования"""
@@ -559,6 +714,22 @@ class UpdateEndDateView(generics.GenericAPIView):
             subscription.end_date = new_end_date
             subscription.save()
             
+            # Создаем уведомление об изменении даты
+            try:
+                Notification.objects.create(
+                    user=request.user,
+                    notification_type='info',
+                    title='Дата окончания изменена',
+                    message=f'Дата окончания подписки "{subscription.plan.name}" изменена на {new_end_date.strftime("%d.%m.%Y %H:%M")}',
+                    data={
+                        'subscription_id': subscription.id,
+                        'plan_name': subscription.plan.name,
+                        'new_end_date': new_end_date.isoformat()
+                    }
+                )
+            except Exception as e:
+                logger.error(f"Ошибка при создании уведомления: {e}")
+            
             return Response({
                 'success': True,
                 'message': f'Дата окончания обновлена: {new_end_date}',
@@ -567,6 +738,7 @@ class UpdateEndDateView(generics.GenericAPIView):
             
         except UserSubscription.DoesNotExist:
             return Response({'error': 'Подписка не найдена'}, status=status.HTTP_404_NOT_FOUND)
+
 
 class ManualRenewalCheckView(generics.GenericAPIView):
     """Ручная проверка продления"""
@@ -580,11 +752,6 @@ class ManualRenewalCheckView(generics.GenericAPIView):
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        from datetime import timedelta
-        from django.utils import timezone
-        from .payment_gateway import FakePaymentGateway
-        
-        # Находим подписки для проверки (заканчиваются в течение 24 часов)
         renewal_date = timezone.now() + timedelta(hours=24)
         
         subscriptions = UserSubscription.objects.filter(
@@ -600,6 +767,19 @@ class ManualRenewalCheckView(generics.GenericAPIView):
         
         for subscription in subscriptions:
             try:
+                # Проверяем баланс пользователя
+                if subscription.user.balance < subscription.plan.price:
+                    results.append({
+                        'subscription_id': subscription.id,
+                        'user': subscription.user.username,
+                        'plan': subscription.plan.name,
+                        'status': 'failed',
+                        'error': 'Недостаточно средств на балансе',
+                        'message': f'Баланс: {subscription.user.balance}, требуется: {subscription.plan.price}'
+                    })
+                    failed_count += 1
+                    continue
+                
                 # Имитация платежа
                 payment_result = FakePaymentGateway.process_payment(
                     amount=float(subscription.plan.price),
@@ -608,6 +788,10 @@ class ManualRenewalCheckView(generics.GenericAPIView):
                 )
                 
                 if payment_result['success']:
+                    # Списание средств
+                    subscription.user.balance -= subscription.plan.price
+                    subscription.user.save()
+                    
                     # Продлеваем подписку
                     new_end_date = subscription.end_date + timedelta(days=subscription.plan.duration_days)
                     subscription.end_date = new_end_date
@@ -624,12 +808,31 @@ class ManualRenewalCheckView(generics.GenericAPIView):
                         payment_data=payment_result
                     )
                     
+                    # Создаем уведомление
+                    try:
+                        Notification.objects.create(
+                            user=subscription.user,
+                            notification_type='subscription_renewal',
+                            title='Подписка продлена',
+                            message=f'Ваша подписка "{subscription.plan.name}" автоматически продлена до {new_end_date.strftime("%d.%m.%Y")}',
+                            data={
+                                'subscription_id': subscription.id,
+                                'plan_name': subscription.plan.name,
+                                'new_end_date': new_end_date.isoformat(),
+                                'amount': str(subscription.plan.price),
+                                'new_balance': float(subscription.user.balance)
+                            }
+                        )
+                    except Exception as e:
+                        logger.error(f"Ошибка при создании уведомления: {e}")
+                    
                     results.append({
                         'subscription_id': subscription.id,
                         'user': subscription.user.username,
                         'plan': subscription.plan.name,
                         'status': 'renewed',
                         'new_end_date': new_end_date.isoformat(),
+                        'new_balance': float(subscription.user.balance),
                         'message': 'Успешно продлено'
                     })
                     renewed_count += 1
@@ -722,3 +925,12 @@ class AdminTransactionViewSet(viewsets.ReadOnlyModelViewSet):
             return Transaction.objects.none()
         
         return Transaction.objects.all().select_related('user').order_by('-created_at')
+
+
+class MySubscriptionsView(generics.ListAPIView):
+    """Получить все подписки текущего пользователя"""
+    serializer_class = UserSubscriptionSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get_queryset(self):
+        return UserSubscription.objects.filter(user=self.request.user).select_related('plan')
