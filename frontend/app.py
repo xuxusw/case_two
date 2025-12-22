@@ -61,13 +61,13 @@ col1, col2 = st.columns(2)
 with col1:
     st.markdown("""
     <div class="feature-list">
-    <h3>For Users:</h3>
+    <h3>Для пользователей:</h3>
     <ul>
-    <li>Secure registration and login</li>
-    <li>Multiple subscription plans</li>
-    <li>Promo codes and discounts</li>
-    <li>Payment history</li>
-    <li>Subscription management</li>
+    <li>Безопасная регистрация и вход</li>
+    <li>Несколько планов подписки</li>
+    <li>Промокоды и скидки</li>
+    <li>История платежей</li>
+    <li>Управление подписками</li>
     </ul>
     </div>
     """, unsafe_allow_html=True)
@@ -75,12 +75,12 @@ with col1:
 with col2:
     st.markdown("""
     <div class="feature-list">
-    <h3>Technologies:</h3>
+    <h3>Используемые технологии:</h3>
     <ul>
     <li><strong>Backend:</strong> Django REST Framework</li>
     <li><strong>Frontend:</strong> Streamlit</li>
-    <li><strong>Authentication:</strong> JWT tokens</li>
-    <li><strong>Payments:</strong> Fake gateway (for testing)</li>
+    <li><strong>Авторизация:</strong> JWT tokens</li>
+    <li><strong>Платежи:</strong> Fake gateway (for testing)</li>
     <li><strong>Database:</strong> SQLite</li>
     </ul>
     </div>
@@ -88,15 +88,15 @@ with col2:
 
 st.markdown("---")
 
-st.markdown("### Quick Start")
+st.markdown("### Быстрый старт")
 
 col1, col2 = st.columns(2)
 
 with col1:
     st.markdown("""
     <div class="app-card">
-        <h2>Authentication</h2>
-        <p>Login or register new account</p>
+        <h2>Авторизация</h2>
+        <p>Войти или зарегистрировать новый аккаунт</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -106,8 +106,8 @@ with col1:
 with col2:
     st.markdown("""
     <div class="app-card">
-        <h2>Subscription Management</h2>
-        <p>View and manage your subscriptions</p>
+        <h2>Управление подписками</h2>
+        <p>Смотри и управляй своими подписками</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -122,10 +122,10 @@ with col1:
     st.markdown("**Email:**")
     st.markdown("support@subscription-system.com")
 with col2:
-    st.markdown("**Phone:**")
+    st.markdown("**Телефон:**")
     st.markdown("+1 (555) 123-4567")
 with col3:
-    st.markdown("**Working hours:**")
+    st.markdown("**Рабочие часы:**")
     st.markdown("Mon-Fri: 9:00-18:00")
 
 st.markdown("---")
