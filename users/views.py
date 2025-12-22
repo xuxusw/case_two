@@ -130,6 +130,8 @@ def get_user_balance(request):
 @permission_classes([permissions.IsAuthenticated])
 def deposit_funds(request):
     """Пополнение баланса пользователя"""
+    # Импортируем задачу здесь, чтобы избежать кругового импорта
+    from subscriptions.background_tasks import check_subscription_renewals
     try:
         from .serializers import DepositSerializer
         serializer = DepositSerializer(data=request.data)
@@ -139,33 +141,19 @@ def deposit_funds(request):
         
         amount = serializer.validated_data['amount']
         
-        with db_transaction.atomic():  # Используем переименованное
+        with db_transaction.atomic():  
             user = request.user
             old_balance = user.balance
             user.balance += amount
             user.save()
             
-            # ИСПРАВЛЕНИЕ: Убрано поле 'metadata' которое вызывает ошибку
-            # Вместо него используем 'payment_data' если поле существует в модели
-            # или просто не передаем дополнительные поля
-            try:
-                # Пробуем создать с payment_data если модель поддерживает
-                transaction = Transaction.objects.create(
-                    user=user,
-                    amount=amount,
-                    transaction_type='deposit',
-                    status='completed',
-                    description=f'Пополнение баланса на {amount} руб.'
-                )
-            except:
-                # Если ошибка, создаем без дополнительных полей
-                transaction = Transaction.objects.create(
-                    user=user,
-                    amount=amount,
-                    transaction_type='deposit',
-                    status='completed',
-                    description=f'Пополнение баланса на {amount} руб.'
-                )
+            transaction = Transaction.objects.create(
+                user=user,
+                amount=amount,
+                transaction_type='deposit',
+                status='completed',
+                description=f'Пополнение баланса на {amount} руб.'
+            )
             
             # Создаем уведомление
             Notification.objects.create(
@@ -186,6 +174,10 @@ def deposit_funds(request):
             logger.info(f"Старый баланс: {old_balance} руб.")
             logger.info(f"Новый баланс: {user.balance} руб.")
             logger.info(f"{'='*50}")
+            
+            # Запускаем проверку продления подписок
+            # Это активирует подписки, которые ждали денег (pending_renewal)
+            check_subscription_renewals()
             
             return Response({
                 'success': True,
@@ -211,7 +203,6 @@ def deposit_funds(request):
             user.balance += amount
             user.save()
             
-            # ИСПРАВЛЕНИЕ: Без metadata
             transaction = Transaction.objects.create(
                 user=user,
                 amount=amount,
@@ -317,25 +308,13 @@ def adjust_balance_admin(request, user_id):
             
             user.save()
             
-            # ИСПРАВЛЕНИЕ: Убрано поле metadata из создания транзакции
-            try:
-                # Пробуем с payment_data
-                transaction = Transaction.objects.create(
-                    user=user,
-                    amount=amount,
-                    transaction_type=transaction_type,
-                    status='completed',
-                    description=description
-                )
-            except:
-                # Без дополнительных полей
-                transaction = Transaction.objects.create(
-                    user=user,
-                    amount=amount,
-                    transaction_type=transaction_type,
-                    status='completed',
-                    description=description
-                )
+            transaction = Transaction.objects.create(
+                user=user,
+                amount=amount,
+                transaction_type=transaction_type,
+                status='completed',
+                description=description
+            )
             
             # Создаем уведомление для пользователя
             Notification.objects.create(
