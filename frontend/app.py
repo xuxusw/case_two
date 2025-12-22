@@ -126,7 +126,7 @@ with col2:
     st.markdown("+1 (555) 123-4567")
 with col3:
     st.markdown("**Рабочие часы:**")
-    st.markdown("Mon-Fri: 9:00-18:00")
+    st.markdown("пн-пт: 9:00-18:00")
 
 st.markdown("---")
 st.markdown("System Status")
