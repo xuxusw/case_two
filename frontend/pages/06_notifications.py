@@ -102,33 +102,35 @@ def main():
                     
                     with col2:
                         if not notification.get('is_read'):
-                            if st.button("Прочитать", key=f"read_{notification.get('id')}"):
-                                try:
-                                    mark_response = requests.post(
-                                        f"{API_BASE_URL}/subscriptions/notifications/{notification.get('id')}/mark-read/",
-                                        headers=headers
-                                    )
-                                    if mark_response.status_code == 200:
-                                        st.success("Уведомление отмечено как прочитанное")
-                                        st.rerun()
-                                except:
-                                    st.error("Ошибка обновления статуса")
+                                if st.button("Прочитать", key=f"read_{notification.get('id')}"):
+                                    try:
+                                        # ИСПРАВЛЕНО: изменен путь на 'mark-as-read'
+                                        mark_response = requests.post(
+                                            f"{API_BASE_URL}/subscriptions/notifications/{notification.get('id')}/mark-as-read/",
+                                            headers=headers
+                                        )
+                                        if mark_response.status_code == 200:
+                                            st.rerun() # Страница обновится и уведомление станет "прочитанным"
+                                        else:
+                                            st.error(f"Ошибка: {mark_response.status_code}")
+                                    except Exception as e:
+                                        st.error(f"Ошибка соединения: {e}")
                 
                 # Кнопки действий
                 col1, col2 = st.columns(2)
                 with col1:
                     if st.button("Отметить все как прочитанные", use_container_width=True):
                         try:
-                            response = requests.post(
-                                f"{API_BASE_URL}/subscriptions/notifications/mark-all-read/",
+                            # ИСПРАВЛЕНО: маршурт mark-all-as-read 
+                            res = requests.post(
+                                f"{API_BASE_URL}/subscriptions/notifications/mark-all-as-read/",
                                 headers=headers
                             )
-                            if response.status_code == 200:
-                                st.success("Все уведомления отмечены как прочитанные")
+                            if res.status_code == 200:
+                                st.success("Все уведомления прочитаны")
                                 st.rerun()
-                        except:
-                            st.error("Ошибка")
-                
+                        except Exception as e:
+                            st.error(f"Ошибка: {e}")    
                 with col2:
                     if st.button("Удалить прочитанные", use_container_width=True):
                         st.info("Функция будет реализована")

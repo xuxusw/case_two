@@ -948,21 +948,22 @@ class MySubscriptionsView(generics.ListAPIView):
 
 class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     """API для просмотра уведомлений пользователя"""
-    permission_classes = [permissions.IsAuthenticated]
     serializer_class = NotificationSerializer
+    permission_classes = [permissions.IsAuthenticated]
     
     def get_queryset(self):
-        # Возвращаем уведомления только текущего пользователя, сначала новые
         return Notification.objects.filter(user=self.request.user).order_by('-created_at')
 
-    @action(detail=False, methods=['post'], url_path='mark-all-as-read')
-    def mark_all_as_read(self, request):
-        Notification.objects.filter(user=request.user, is_read=False).update(is_read=True)
-        return Response({'status': 'notifications marked as read'})
-    
     @action(detail=True, methods=['post'], url_path='mark-as-read')
     def mark_as_read(self, request, pk=None):
+        """Помечает конкретное уведомление как прочитанное"""
         notification = self.get_object()
         notification.is_read = True
         notification.save()
-        return Response({'status': 'read'})
+        return Response({'status': 'notification marked as read'})
+
+    @action(detail=False, methods=['post'], url_path='mark-all-as-read')
+    def mark_all_as_read(self, request):
+        """Помечает все уведомления пользователя как прочитанные"""
+        Notification.objects.filter(user=request.user, is_read=False).update(is_read=True)
+        return Response({'status': 'all notifications marked as read'})
