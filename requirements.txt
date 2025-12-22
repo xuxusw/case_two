@@ -3,3 +3,7 @@ djangorestframework
 djangorestframework-simplejwt
 streamlit 
 requests
+celery 
+redis 
+django-celery-beat
+django-background-tasks

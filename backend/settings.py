@@ -43,6 +43,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt',
     'users',
     'subscriptions',
+    'background_task',
 ]
 
 MIDDLEWARE = [
@@ -140,3 +141,31 @@ SIMPLE_JWT = {
 }
 
 AUTH_USER_MODEL = 'users.User'
+
+# Фоновые задачи
+BACKGROUND_TASK_RUN_ASYNC = True
+BACKGROUND_TASK_ASYNC_THREADS = 4
+MAX_ATTEMPTS = 3
+
+
+# # НАСТРОЙКИ CELERY
+# CELERY_BROKER_URL = 'redis://localhost:6379/0'  # Redis
+# CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
+# CELERY_ACCEPT_CONTENT = ['json']
+# CELERY_TASK_SERIALIZER = 'json'
+# CELERY_RESULT_SERIALIZER = 'json'
+# CELERY_TIMEZONE = 'Europe/Moscow'
+
+# Если Redis не установлен, альтернатива:
+# CELERY_BROKER_URL = 'memory://'
+# CELERY_RESULT_BACKEND = 'cache+memory://'
+
+
+# Настройки email
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = 'your-email@gmail.com'
+EMAIL_HOST_PASSWORD = 'your-password'
+DEFAULT_FROM_EMAIL = 'Subscription System <noreply@subscription-system.com>'
